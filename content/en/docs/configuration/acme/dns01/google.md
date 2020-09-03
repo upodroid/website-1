@@ -1,12 +1,12 @@
 ---
-title: "Google CloudDNS"
-linkTitle: "Google CloudDNS"
+title: "Google Cloud DNS"
+linkTitle: "Google Cloud DNS"
 weight: 30
 type: "docs"
 ---
 
 This guide explains how to set up an `Issuer`, or `ClusterIssuer`, to use Google
-CloudDNS to solve DNS01 ACME challenges. It's advised you read the [DNS01
+Cloud DNS to solve DNS01 ACME challenges. It's advised you read the [DNS01
 Challenge Provider](../) page first for a more general understanding of
 how cert-manager handles DNS01 challenges.
 
@@ -26,14 +26,14 @@ DNS01 challenge. To enable this, a GCP service account must be created with the
 
 ```bash
 $ PROJECT_ID=myproject-id
-$ gcloud iam service-accounts create dns01-solver --display-name "dns01-solver"
+$ gcloud iam service-accounts create cert-manager --display-name "Cert Manager"
 ```
 
 In the command above, replace `myproject-id` with the ID of your project.
 
 ```bash
 $ gcloud projects add-iam-policy-binding $PROJECT_ID \
-   --member serviceAccount:dns01-solver@$PROJECT_ID.iam.gserviceaccount.com \
+   --member serviceAccount:cert-manager@$PROJECT_ID.iam.gserviceaccount.com \
    --role roles/dns.admin
 ```
 
@@ -45,43 +45,38 @@ $ gcloud projects add-iam-policy-binding $PROJECT_ID \
 >  * `dns.changes.*`
 >  * `dns.managedZones.list`
 
-## Use Static Credentials
+## Use Workload Identity
 
-Follow the instructions in the following sections to deploy cert-manager using
-static credentials for the service account you created. You should rotate these
-credentials periodically.
+[Workload Identity](cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) is the recommended way to access Google Cloud services from applications running 
+within GKE due to its improved security properties and manageability.
 
-### Create a Service Account Secret
+To access this service account, you will need to annotate the Kubernetes Service Account of cert-manager by running the following command, replacing instances of `$PROJECT_ID` with the ID of your project. :
 
-To access this service account, cert-manager uses a key stored in a Kubernetes
-`Secret`. First, create a key for the service account and download it as a JSON
-file, then create a `Secret` from this file.
+```bash
+$ helm upgrade --install \
+  cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --version v0.16.1 \
+  --set installCRDs=true --set serviceAccount.annotations."iam\.gke\.io/gcp-service-account"=cert-manager@$PROJECT_ID.iam.gserviceaccount.com
+```
 
-If you did not create the service account `dns01-solver` before, you need to
+If you did not create the service account `cert-manager` before, you need to
 create it first.
 
 ```bash
-$ gcloud iam service-accounts create dns01-solver
+$ gcloud iam service-accounts create cert-manager
 ```
 
-Replace instances of `$PROJECT_ID` with the ID of your project.
+Replace instances of `$PROJECT_ID` with the ID of your project. This command 
+assumes you installed cert-manager in the cert-manager namespace. If you didn't, then amend the namespace accordingly.
+
 ```bash
-$ gcloud iam service-accounts keys create key.json \
-   --iam-account dns01-solver@$PROJECT_ID.iam.gserviceaccount.com
-$ kubectl create secret generic clouddns-dns01-solver-svc-acct \
-   --from-file=key.json
+$ gcloud iam service-accounts add-iam-policy-binding \
+--role roles/iam.workloadIdentityUser \
+--member serviceAccount:$PROJECT_ID.svc.id.goog[cert-manager/cert-manager] cert-manager@$PROJECT_ID.iam.gserviceaccount.com \
+--project $PROJECT_ID
+$ 
 ```
-
-> Note: Keep the key file safe and do not share it, as it could be used to gain
-> access to your cloud resources. The key file can be deleted once it has been
-> used to generate the `Secret`.
-
-> Note: If you have already added the `Secret` but get an error: `...due to
-> error processing: error getting clouddns service account: secret "XXX" not
-> found`, the `Secret` may be in the wrong namespace. If you're configuring a
-> `ClusterIssuer`, move the `Secret` to the `Cluster Resource Namespace` which
-> is `cert-manager` by default.  If you're configuring an `Issuer`, the `Secret`
-> should be stored in the same namespace as the `Issuer` resource.
 
 ### Create an Issuer That Uses CloudDNS
 
@@ -101,10 +96,6 @@ spec:
         cloudDNS:
           # The ID of the GCP project
           project: $PROJECT_ID
-          # This is the secret used to access the service account
-          serviceAccountSecretRef:
-            name: clouddns-dns01-solver-svc-acct
-            key: key.json
 ```
 
 For more information about `Issuers` and `ClusterIssuers`, see
